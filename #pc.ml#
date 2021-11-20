@@ -12,7 +12,6 @@ let string_to_list string =
     else run (i - 1) (string.[i] :: s) in
   run (String.length string - 1) [];;
 
-
 let list_to_string s =
   List.fold_left
     (fun str ch -> str ^ (String.make 1 ch))
