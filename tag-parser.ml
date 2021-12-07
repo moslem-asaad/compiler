@@ -157,12 +157,88 @@ let reserved_word_list =
 let rec tag_parse_expression sexpr =
 let sexpr = macro_expand sexpr in
 match sexpr with 
-(* Implement tag parsing here *)
+|ScmNil -> ScmConst(ScmNil)
+|ScmBoolean(x) -> ScmConst(ScmBoolean(x))
+|ScmChar(x) -> ScmConst(ScmChar(x))
+|ScmString(x) -> ScmConst(ScmString(x))
+|ScmNumber(x) -> ScmConst(ScmNumber(x))
+|ScmPair(ScmSymbol "quote",ScmPair(x,ScmNil)) -> ScmConst(x)
+|ScmSymbol(x) -> if (List.mem x reserved_word_list)
+                  then raise(X_reserved_word x)
+                  else ScmVar(x)
+|ScmPair(ScmSymbol "if", ScmPair (test, ScmPair (dit, ScmNil))) -> 
+  ScmIf(tag_parse_expression(test), tag_parse_expression(dit), ScmConst(ScmVoid))
+|ScmPair (ScmSymbol "if",ScmPair(test, ScmPair (dit, ScmPair (dif, ScmNil)))) -> 
+  ScmIf(tag_parse_expression(test), tag_parse_expression(dit), tag_parse_expression(dif))
+|ScmPair (ScmSymbol "or", ScmNil) -> ScmConst (ScmBoolean(false))
+|ScmPair(ScmSymbol "or",ScmPair(x,ScmNil)) -> tag_parse_expression(x)
+|ScmPair(ScmSymbol "or",rest) when (scm_is_list rest)-> ScmOr(List.map tag_parse_expression (scm_list_to_list rest))
+|ScmPair(ScmSymbol "lambda",ScmPair(args,rest)) when (scm_is_list args) && (scm_is_list rest) && rest != ScmNil-> ScmLambdaSimple((List.map handle_lambda_simple_arg (scm_list_to_list args)), (handle_lambda_body rest))
+|ScmPair(ScmSymbol "lambda",ScmPair(ScmSymbol var,rest)) when (scm_is_list rest) && rest != ScmNil-> ScmLambdaOpt([],var,(handle_lambda_body rest))
+|ScmPair(ScmSymbol "lambda",ScmPair(ScmPair(ScmSymbol first,sec),rest)) when (scm_is_list rest) && rest != ScmNil -> ScmLambdaOpt([first]@(handle_lambda_opt_args sec),(handle_lambda_opt_single_arg sec),(handle_lambda_body rest))
+|ScmPair(ScmSymbol "define",ScmPair(ScmSymbol x,ScmPair(y,ScmNil))) -> if (List.mem x reserved_word_list)
+                                                                        then raise(X_reserved_word x)
+                                                                        else ScmDef(ScmVar(x), tag_parse_expression(y))
+|ScmPair(ScmSymbol "define",ScmPair(ScmPair(ScmSymbol x,args),rest)) -> ScmDef(ScmVar(x), tag_parse_expression(ScmPair(ScmSymbol "lambda" , ScmPair(args,rest))))
+|ScmPair(ScmSymbol "set!",ScmPair(ScmSymbol x,ScmPair(y,ScmNil))) -> ScmSet(ScmVar(x),tag_parse_expression(y))                                                                 
+|ScmPair(ScmSymbol "begin",rest) when (scm_is_list rest)-> ScmSeq (List.map tag_parse_expression (scm_list_to_list rest))
+|ScmPair(x,rest) when (scm_is_list rest)-> ScmApplic(tag_parse_expression(x), (List.map tag_parse_expression (scm_list_to_list rest)))
+
+
 | _ -> raise (X_syntax_error (sexpr, "Sexpr structure not recognized"))
+
+and handle_lambda_opt_args args = 
+match args with
+|ScmPair (ScmSymbol x, rest) -> [x]@(handle_lambda_opt_args rest)
+|ScmSymbol x -> []
+|_ -> raise X_not_implemented
+
+and handle_lambda_opt_single_arg args = 
+match args with
+|ScmPair (ScmSymbol x, rest) -> handle_lambda_opt_single_arg(rest)
+|ScmSymbol x -> x
+|_ -> raise X_not_implemented
+
+and handle_lambda_body body = 
+match body with
+|ScmPair (x, ScmNil) -> tag_parse_expression(x)
+|body -> tag_parse_expression(ScmPair(ScmSymbol "begin",body))
+
+and handle_lambda_simple_arg x = 
+match x with 
+|ScmSymbol(var) -> if (List.mem var reserved_word_list)
+                  then raise(X_reserved_word var)
+                  else var
+|_ -> raise X_not_implemented
 
 and macro_expand sexpr =
 match sexpr with
-(* Handle macro expansion patterns here *)
+|ScmPair (ScmSymbol "and", ScmNil) -> ScmBoolean(true)
+|ScmPair(ScmSymbol "and",ScmPair(x,ScmNil)) -> x
+|ScmPair (ScmSymbol "and", ScmPair(x,rest)) -> ScmPair(ScmSymbol "if" ,ScmPair(x,ScmPair(macro_expand(ScmPair(ScmSymbol("and"),rest)),ScmPair(ScmBoolean(false),ScmNil))))
+|ScmPair(ScmSymbol "let",ScmPair(args, rest)) when (scm_is_list args)-> ScmPair(ScmPair(ScmSymbol "lambda" , ScmPair(list_to_proper_list (List.map let_pairArgs_to_args (scm_list_to_list args)),rest)),list_to_proper_list((List.map let_pairArgs_to_Exp (scm_list_to_list args))))
+|ScmPair(ScmSymbol "let*", ScmPair(first,rest)) when (scm_is_list first) && (scm_list_length first)<2 -> macro_expand(ScmPair(ScmSymbol "let", ScmPair(first,rest)))
+|ScmPair(ScmSymbol "let*", ScmPair(ScmPair(first,last),rest)) when (scm_is_list (ScmPair(first,last))) -> macro_expand(ScmPair(ScmSymbol "let", ScmPair(ScmPair(first,ScmNil),ScmPair(macro_expand(ScmPair(ScmSymbol "let*" ,ScmPair(last,rest))),ScmNil))))
+|ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(first,last),ScmNil)) when (scm_is_list last)-> macro_expand(ScmPair(                          ScmSymbol("if")    ,       ScmPair(                                  first,             ScmPair(ScmPair(ScmSymbol("begin"),last) , ScmNil)                         )                       ))
+|ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(first,last),rest)) when (scm_is_list last) -> macro_expand(ScmPair(ScmSymbol("if") , ScmPair(first,ScmPair(ScmPair(ScmSymbol("begin"),last),macro_expand(ScmPair(ScmSymbol("cond"),rest))))))
 | _ -> sexpr
+
+and let_pairArgs_to_args args = 
+match args with
+| ScmPair(ScmSymbol x ,rest) when (scm_is_list rest) -> ScmSymbol(x)
+| _ -> raise X_not_implemented
+
+and let_pairArgs_to_Exp args = 
+match args with
+| ScmPair(ScmSymbol x ,ScmPair(y,rest)) when (scm_is_list rest) -> y
+| _ -> raise X_not_implemented
+
+
+
 end;; 
+
+
+
+(* |ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(first,ScmPair(ScmSymbol("=>"),last)),rest)) when (scm_is_list last) -> 
+|ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(ScmSymbol("=>"))) *)
 
