@@ -219,9 +219,25 @@ match sexpr with
 |ScmPair(ScmSymbol "let",ScmPair(args, rest)) when (scm_is_list args)-> ScmPair(ScmPair(ScmSymbol "lambda" , ScmPair(list_to_proper_list (List.map let_pairArgs_to_args (scm_list_to_list args)),rest)),list_to_proper_list((List.map let_pairArgs_to_Exp (scm_list_to_list args))))
 |ScmPair(ScmSymbol "let*", ScmPair(first,rest)) when (scm_is_list first) && (scm_list_length first)<2 -> macro_expand(ScmPair(ScmSymbol "let", ScmPair(first,rest)))
 |ScmPair(ScmSymbol "let*", ScmPair(ScmPair(first,last),rest)) when (scm_is_list (ScmPair(first,last))) -> macro_expand(ScmPair(ScmSymbol "let", ScmPair(ScmPair(first,ScmNil),ScmPair(macro_expand(ScmPair(ScmSymbol "let*" ,ScmPair(last,rest))),ScmNil))))
+| ScmPair(ScmSymbol("letrec"), ScmPair(args, body)) -> macro_expand (handle_let_rec args body)
 |ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(first,last),ScmNil)) when (scm_is_list last)-> macro_expand(ScmPair(                          ScmSymbol("if")    ,       ScmPair(                                  first,             ScmPair(ScmPair(ScmSymbol("begin"),last) , ScmNil)                         )                       ))
 |ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(first,last),rest)) when (scm_is_list last) -> macro_expand(ScmPair(ScmSymbol("if") , ScmPair(first,ScmPair(ScmPair(ScmSymbol("begin"),last),macro_expand(ScmPair(ScmSymbol("cond"),rest))))))
 | _ -> sexpr
+
+and handle_let_rec args body = 
+match args with 
+|ScmNil ->ScmPair(ScmSymbol "let",ScmPair(ScmNil,body))
+|ScmPair(first,rest) -> ScmPair(ScmSymbol"let",ScmPair(handle_args args,make_set args body))
+
+and handle_args args =
+match args with
+|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),ScmNil) ->ScmPair(ScmPair(arg,ScmPair(ScmPair(ScmSymbol "quote",ScmPair(ScmSymbol "whatever",ScmNil)),ScmNil)),ScmNil)
+|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),rest) ->ScmPair(ScmPair(arg,ScmPair(ScmPair(ScmSymbol "quote",ScmPair(ScmSymbol "whatever",ScmNil)),ScmNil)),handle_args rest)
+ 
+and make_set args body = 
+match args with
+|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),ScmNil) ->ScmPair(ScmPair(ScmSymbol "set!",ScmPair(arg,ScmPair(vl,ScmNil))),body)
+|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),rest) -> ScmPair(ScmPair(ScmSymbol "set!",ScmPair(arg,ScmPair(vl,ScmNil))),make_set rest body)
 
 and let_pairArgs_to_args args = 
 match args with
