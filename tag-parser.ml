@@ -154,6 +154,9 @@ let reserved_word_list =
    "quasiquote"; "quote"; "set!"; "unquote";
    "unquote-splicing"];;
 
+
+
+
 let rec tag_parse_expression sexpr =
 let sexpr = macro_expand sexpr in
 match sexpr with 
@@ -213,30 +216,155 @@ match x with
 
 and macro_expand sexpr =
 match sexpr with
+
 |ScmPair (ScmSymbol "and", ScmNil) -> ScmBoolean(true)
 |ScmPair(ScmSymbol "and",ScmPair(x,ScmNil)) -> x
 |ScmPair (ScmSymbol "and", ScmPair(x,rest)) -> ScmPair(ScmSymbol "if" ,ScmPair(x,ScmPair(macro_expand(ScmPair(ScmSymbol("and"),rest)),ScmPair(ScmBoolean(false),ScmNil))))
-|ScmPair(ScmSymbol "let",ScmPair(args, rest)) when (scm_is_list args)-> ScmPair(ScmPair(ScmSymbol "lambda" , ScmPair(list_to_proper_list (List.map let_pairArgs_to_args (scm_list_to_list args)),rest)),list_to_proper_list((List.map let_pairArgs_to_Exp (scm_list_to_list args))))
+|ScmPair(ScmSymbol "let",ScmPair(args, rest)) when (scm_is_list args) -> ScmPair(ScmPair(ScmSymbol "lambda" , ScmPair(list_to_proper_list (List.map let_pairArgs_to_args (scm_list_to_list args)),rest)),list_to_proper_list((List.map let_pairArgs_to_Exp (scm_list_to_list args))))
 |ScmPair(ScmSymbol "let*", ScmPair(first,rest)) when (scm_is_list first) && (scm_list_length first)<2 -> macro_expand(ScmPair(ScmSymbol "let", ScmPair(first,rest)))
 |ScmPair(ScmSymbol "let*", ScmPair(ScmPair(first,last),rest)) when (scm_is_list (ScmPair(first,last))) -> macro_expand(ScmPair(ScmSymbol "let", ScmPair(ScmPair(first,ScmNil),ScmPair(macro_expand(ScmPair(ScmSymbol "let*" ,ScmPair(last,rest))),ScmNil))))
-| ScmPair(ScmSymbol("letrec"), ScmPair(args, body)) -> macro_expand (handle_let_rec args body)
-|ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(first,last),ScmNil)) when (scm_is_list last)-> macro_expand(ScmPair(                          ScmSymbol("if")    ,       ScmPair(                                  first,             ScmPair(ScmPair(ScmSymbol("begin"),last) , ScmNil)                         )                       ))
-|ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(first,last),rest)) when (scm_is_list last) -> macro_expand(ScmPair(ScmSymbol("if") , ScmPair(first,ScmPair(ScmPair(ScmSymbol("begin"),last),macro_expand(ScmPair(ScmSymbol("cond"),rest))))))
+|ScmPair(ScmSymbol("letrec"), ScmPair(args, body)) when (scm_is_list args) -> macro_expand (handle_let_rec args body)
+|ScmPair (ScmSymbol "cond", ribs) -> macro_expand (expand_cond_ribs ribs)
+|ScmPair (ScmSymbol "quasiquote", ScmPair (expr, ScmNil)) -> expand_quasi_qoute expr
 | _ -> sexpr
+
+
+and expand_quasi_qoute expr = match expr with
+|ScmNil -> ScmPair (ScmSymbol "quote", ScmPair (ScmNil, ScmNil))
+|ScmSymbol(a) -> ScmPair (ScmSymbol "quote", ScmPair (ScmSymbol (a), ScmNil))
+|ScmPair(ScmSymbol "unquote", ScmPair (expr1, ScmNil)) -> expr1
+|ScmPair(ScmSymbol "unquote-splicing", ScmPair (expr1, ScmNil)) -> ScmPair(ScmSymbol "quote",ScmPair(ScmPair(ScmSymbol "unquote-splicing", ScmPair (expr1, ScmNil)),ScmNil))
+
+| ScmPair(ScmPair (ScmSymbol "unquote-splicing", ScmPair (expr1, ScmNil)),expr2) -> ScmPair
+   (ScmSymbol "append",
+    ScmPair ( expr1, ScmPair((expand_quasi_qoute expr2), ScmNil)))
+| ScmPair(expr1,expr2) -> ScmPair 
+   (ScmSymbol "cons",
+    ScmPair ((expand_quasi_qoute expr1) , ScmPair((expand_quasi_qoute expr2), ScmNil) ))
+| ScmVector(lst) -> ScmPair(ScmSymbol "list->vector", ScmPair((expand_quasi_qoute (list_to_proper_list lst)),ScmNil))
+| _ -> expr
+
+and expand_cond_ribs sexpr = match sexpr with
+| ScmPair (ScmPair (ScmSymbol "else", ScmPair(exprs,ScmNil)), ribs) ->  exprs
+| ScmPair (ScmPair (ScmSymbol "else", exprs), ribs) -> ScmPair (ScmSymbol "begin", exprs)
+| ScmPair
+   (ScmPair
+     (expr, ScmPair (ScmSymbol "=>", ScmPair (proc, ScmNil))),
+    ScmNil) ->
+    macro_expand(
+      ScmPair
+   (ScmSymbol "let",
+    ScmPair
+     (ScmPair
+       (ScmPair (ScmSymbol "value", ScmPair (expr, ScmNil)),
+        ScmPair
+         (ScmPair
+           (ScmSymbol "f",
+            ScmPair
+             (ScmPair
+               (ScmSymbol "lambda",
+                ScmPair (ScmNil, ScmPair (proc, ScmNil))),
+              ScmNil)),
+          ScmNil)),
+      ScmPair
+       (ScmPair
+         (ScmSymbol "if",
+          ScmPair
+           (ScmSymbol "value",
+            ScmPair
+             (ScmPair
+               (ScmPair (ScmSymbol "f", ScmNil),
+                ScmPair (ScmSymbol "value", ScmNil)),
+              ScmNil))),
+        ScmNil))))
+| ScmPair
+   (ScmPair
+     (expr, ScmPair (ScmSymbol "=>", ScmPair (proc, ScmNil))),
+    ribs) ->
+let remaining = macro_expand (expand_cond_ribs ribs) in
+macro_expand(
+ScmPair
+   (ScmSymbol "let",
+    ScmPair
+     (ScmPair
+       (ScmPair (ScmSymbol "value", ScmPair (expr, ScmNil)),
+        ScmPair
+         (ScmPair
+           (ScmSymbol "f",
+            ScmPair
+             (ScmPair
+               (ScmSymbol "lambda",
+                ScmPair (ScmNil, ScmPair (proc, ScmNil))),
+              ScmNil)),
+          ScmPair
+           (ScmPair
+             (ScmSymbol "rest",
+              ScmPair
+               (ScmPair
+                 (ScmSymbol "lambda",
+                  ScmPair (ScmNil, ScmPair (remaining, ScmNil))),
+                ScmNil)),
+            ScmNil))),
+      ScmPair
+       (ScmPair
+         (ScmSymbol "if",
+          ScmPair
+           (ScmSymbol "value",
+            ScmPair
+             (ScmPair
+               (ScmPair (ScmSymbol "f", ScmNil),
+                ScmPair (ScmSymbol "value", ScmNil)),
+              ScmPair (ScmPair (ScmSymbol "rest", ScmNil), ScmNil)))),
+        ScmNil))))
+
+| ScmPair (ScmPair (test, ScmPair(exprs,ScmNil)), ScmNil) ->
+ScmPair
+   (ScmSymbol "if",
+    ScmPair (test, ScmPair (exprs, ScmNil)))
+| ScmPair (ScmPair (test, exprs), ScmNil) ->
+ScmPair
+   (ScmSymbol "if",
+    ScmPair
+     (test,
+      ScmPair
+       ( ScmPair (ScmSymbol "begin", exprs),
+        ScmNil)))
+| ScmPair (ScmPair (test, ScmPair(exprs,ScmNil)), ribs) ->
+let remaining = macro_expand (expand_cond_ribs ribs) in
+ScmPair
+   (ScmSymbol "if",
+    ScmPair
+     (test,
+      ScmPair
+       ( exprs,
+        ScmPair (remaining, ScmNil))))
+| ScmPair (ScmPair (test, exprs), ribs) ->
+let remaining = macro_expand (expand_cond_ribs ribs) in
+ScmPair
+   (ScmSymbol "if",
+    ScmPair
+     (test,
+      ScmPair
+       ( ScmPair (ScmSymbol "begin", exprs),
+        ScmPair (remaining, ScmNil))))
+| _ -> raise (X_syntax_error (sexpr, "conddd Sexpr structure not recognized"))
+
 
 and handle_let_rec args body = 
 match args with 
 |ScmNil ->ScmPair(ScmSymbol "let",ScmPair(ScmNil,body))
-|ScmPair(first,rest) -> ScmPair(ScmSymbol"let",ScmPair(handle_args args,make_set args body))
+|ScmPair(first,rest) -> ScmPair(ScmSymbol "let",ScmPair(list_to_proper_list (handle_args args) ,(make_set args body) ))
 
 and handle_args args =
 match args with
-|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),ScmNil) ->ScmPair(ScmPair(arg,ScmPair(ScmPair(ScmSymbol "quote",ScmPair(ScmSymbol "whatever",ScmNil)),ScmNil)),ScmNil)
-|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),rest) ->ScmPair(ScmPair(arg,ScmPair(ScmPair(ScmSymbol "quote",ScmPair(ScmSymbol "whatever",ScmNil)),ScmNil)),handle_args rest)
+|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),ScmNil) -> [(handle_single_argg arg)]
+|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),rest) -> [(handle_single_argg arg)]@(handle_args rest)
+and handle_single_argg arg = ScmPair(arg,ScmPair(ScmPair(ScmSymbol "quote",ScmPair(ScmSymbol "whatever",ScmNil)),ScmNil))
+
  
 and make_set args body = 
 match args with
-|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),ScmNil) ->ScmPair(ScmPair(ScmSymbol "set!",ScmPair(arg,ScmPair(vl,ScmNil))),body)
+|ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),ScmNil) -> ScmPair(ScmPair(ScmSymbol "set!",ScmPair(arg,ScmPair(vl,ScmNil))),body)
 |ScmPair(ScmPair(arg,ScmPair(vl,ScmNil)),rest) -> ScmPair(ScmPair(ScmSymbol "set!",ScmPair(arg,ScmPair(vl,ScmNil))),make_set rest body)
 
 and let_pairArgs_to_args args = 
@@ -253,8 +381,4 @@ match args with
 
 end;; 
 
-
-
-(* |ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(first,ScmPair(ScmSymbol("=>"),last)),rest)) when (scm_is_list last) -> 
-|ScmPair(ScmSymbol "cond" , ScmPair(ScmPair(ScmSymbol("=>"))) *)
 

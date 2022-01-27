@@ -18,7 +18,6 @@
 %define MB(n) 1024*KB(n)
 %define GB(n) 1024*MB(n)
 
-
 %macro SKIP_TYPE_TAG 2
 	mov %1, qword [%2+TYPE_SIZE]	
 %endmacro	
@@ -32,7 +31,7 @@
 %macro CHAR_VAL 2
 	movzx %1, byte [%2+TYPE_SIZE]
 %endmacro
-
+%define PARAM_COUNT qword[ rbp + 3 * WORD_SIZE ]
 %define FLOAT_VAL SKIP_TYPE_TAG
 
 %define STRING_LENGTH SKIP_TYPE_TAG
@@ -137,6 +136,46 @@
     pop %1
     pop rcx
     pop rbx
+%endmacro
+
+%macro SHIFT_FRAME 1
+	push rax
+	mov rax, PARAM_COUNT
+	add rax, 4
+%assign i 1
+%rep %1
+	dec rax
+	push qword [rbp-WORD_SIZE*i]
+	pop qword [rbp+WORD_SIZE*rax]
+%assign i i+1
+%endrep
+	pop rax
+%endmacro
+
+%macro MAKE_LITERAL_VECTOR 0-*
+	db T_VECTOR
+	dq %0
+	%rep %0
+	dq %1
+	%rotate 1
+	%endrep
+	%endmacro
+
+%macro MAKE_LITERAL 2
+	db %1
+	%2
+%endmacro
+
+%define MAKE_LITERAL_CHAR(val) MAKE_LITERAL T_CHAR, db val
+%define MAKE_LITERAL_FLOAT(val) MAKE_LITERAL T_FLOAT, dq val
+%define MAKE_LITERAL_SYMBOL(val) MAKE_LITERAL T_SYMBOL, dq val
+
+%macro MAKE_LITERAL_STRING 1
+	db T_STRING
+	dq(%%end_str - %%str)
+%%str:
+	db %1
+%%end_str
 %endmacro
 
 ;;; Creates a SOB with tag %2 

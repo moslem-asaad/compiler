@@ -346,12 +346,143 @@ module Prims : PRIMS = struct
          jge .make_result
          neg rdx
          .make_result:
-         MAKE_RATIONAL(rax, rdx, 1)", make_binary, "gcd";  
+         MAKE_RATIONAL(rax, rdx, 1)", make_binary, "gcd"; 
+         
+        (* cons *)
+        "MAKE_PAIR(rax, rsi, rdi)", make_binary, "cons";
+        (* car *)
+        "CAR rax, rsi", make_unary, "car";
+        (* cdr *)
+        "CDR rax, rsi", make_unary, "cdr";        
       ] in
     String.concat "\n\n" (List.map (fun (a, b, c) -> (b c a)) misc_parts);;
+
+    let set_car = 
+      let set_car_inner = 
+        "mov qword[rsi + TYPE_SIZE], rdi
+         mov rax , SOB_VOID_ADDRESS" in
+        make_binary "setcar" set_car_inner ;; 
+
+    let set_cdr = 
+      let set_cdr_inner = 
+        "mov qword[rsi + TYPE_SIZE + 8], rdi
+         mov rax, SOB_VOID_ADDRESS" in 
+        make_binary "setcdr" set_cdr_inner;;
+
+    let apply = 
+      let apply_inner = 
+        (* the steps are : 
+          1- rbx point to the list 
+          2- reverse the list and store it in rdx
+          3- push the reversed list to the stack 
+          4- push the argv 
+          5- push the new number of argc
+          6- push env
+          7- push old ret address
+          8- fix the stack 
+          9- update rsp 
+          10- jmp to closure code
+        *)
+        "; 1- rbx point to the list
+
+         mov r8, qword[rbp + 8 * 3] ; r8 stores |arg|
+         dec r8
+         mov rbx, PVAR(r8) ; rbx = pointer to the list
+
+         ; 2- reverse the list and store it in rdx
+
+         mov rdx, SOB_NIL_ADDRESS ; to store the list in
+         cmp rbx, SOB_NIL_ADDRESS 
+         mov r10, rbx
+         je after_reversing
+         reverse_list:
+         CAR r9, r10
+         MAKE_PAIR (rsi, r9, rdx)
+         mov rdx, rsi
+         CDR r10, r10
+         cmp r10, SOB_NIL_ADDRESS
+         je after_reversing
+         jmp reverse_list
+         after_reversing:
+
+         ;; 3- push the reversed list to the stack 
+
+         cmp rdx, SOB_NIL_ADDRESS
+         je after_pushing_the_list
+         mov r9, 0  ;; lets save this regg as num of elements in the list
+         mov r10, rdx
+         push_the_list:
+         CAR r11, r10
+         push r11
+         CDR r10, r10
+         inc r9
+         cmp r10, SOB_NIL_ADDRESS
+         je after_pushing_the_list
+         jmp push_the_list
+
+         ;; 4- push the argv
+
+         after_pushing_the_list:
+         mov r10, r8
+         dec r10  ;; r10 = |arg| - proc - 1(list)
+         cmp r10, 0 
+         je end_push_argv
+         push_argv:
+         push qword [rbp+ 8 * (4+r10)]
+         dec r10
+         cmp r10, 0
+         je end_push_argv
+         jmp push_argv
+
+         ;; 5- push the new number of argc
+
+         end_push_argv:
+         add r9, qword [rbp + 8 * 3]
+         sub r9, 2
+         push r9
+
+         ;; 6- push env
+
+         mov rax, qword[rbp + 8 * 4]  ; closure of proc in rax
+         CLOSURE_ENV r15, rax ; r15 = rax-> env
+         push r15
+
+         ;; 7- push old ret address
+
+         push qword[rbp + 8 * 1] ;; old ret address 
+
+         ;; 8- fix the stack
+        
+         add r8, 4  ;; r8 = |old frame|
+         shl r8, 3
+         add r8, rbp ;; r8 point to last element in the old frame
+         mov rbp, qword[rbp]
+         mov r9, [rsp + 8 * 2] ;; r9 = num of new argc
+         add r9 ,3
+         shift_frame:
+         mov r10, [rsp + 8 * (r9 - 1)]
+         mov [r8], r10
+         sub r8, 8
+         dec r9
+         cmp r9, 0
+         je finish_shift_frame
+         jmp shift_frame
+
+         ;; 9- update rsp 
+
+         finish_shift_frame:
+         add r8, 8
+         mov rsp, r8
+
+         ;; 10- jmp to closure code
+
+         CLOSURE_CODE rax, rax ;; rax = rax -> code
+         jmp rax
+        " in 
+        make_routine "apply" apply_inner;;
 
   (* This is the interface of the module. It constructs a large x86 64-bit string using the routines
      defined above. The main compiler pipline code (in compiler.ml) calls into this module to get the
      string of primitive procedures. *)
-  let procs = String.concat "\n\n" [type_queries ; numeric_ops; misc_ops];;
+  let procs = String.concat "\n\n" [type_queries ; numeric_ops; misc_ops; set_car; set_cdr; apply];;
 end;;
